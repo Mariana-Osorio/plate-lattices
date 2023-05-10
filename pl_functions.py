@@ -1,5 +1,7 @@
-from itertools import combinations, product
+from itertools import product
 from fractions import Fraction
+import networkx as nx
+from copy import copy, deepcopy
 from helpers import *
 
 uc = [Plane(point=[0, 0, 0], normal=[0, 1, 0]), Plane(point=[1, 1, 1], normal=[0, 1, 0]),
@@ -311,6 +313,9 @@ def simplify_rational_normal(normal, limit_denominator=20, float_nums=False):
     """
     Returns the normal with the rational numbers simplified.
     """
+    if len(np.argwhere(normal == 0)) == 2:
+        normal[np.argwhere(normal != 0)[0][0]] = 1
+
     n1, n2, n3 = normal
     if not isinstance(n1, Fraction) and not isinstance(n2, Fraction) and not isinstance(n3, Fraction):
         n1 = Fraction(n1).limit_denominator(limit_denominator)
@@ -326,7 +331,7 @@ def simplify_rational_normal(normal, limit_denominator=20, float_nums=False):
         return np.array([n1, n2, n3])
 
 
-def plate_num_from_normal(normal, max_plates=10):
+def plate_num_from_normal(normal, max_plates=20):
     """
     Returns the number of plates needed to fulfill the periodicity conditions of a
     plane with a given normal in the unit cell.
@@ -499,25 +504,6 @@ def random_plane_uc():
     return Plane(normal=normal, point=pt)
 
 
-def to_2d(poly):
-    """
-    Returns the 2D projection of a 3d planar polygon.
-    """
-    # New reference system
-    a = poly[1]-poly[0]
-    a = a/np.linalg.norm(a)
-    n = np.cross(a, poly[-1]-poly[0])
-    n = n/np.linalg.norm(n)
-    b = -np.cross(a, n)
-
-    # Reference system change
-    R_inv = np.linalg.inv(np.array([a, b, n])).T
-    real = np.dot(R_inv, poly.T).T
-    real[np.isclose(real, 0)] = 0
-
-    return real[:, :2]
-
-
 def area_poly(poly):
     """
     Returns the area of a polygon.
@@ -536,4 +522,234 @@ def sample_random_plate():
         if area > 0.25:
             break
     return plane, edge_lines, polygon
+
+
+def find_all_cycles(G, source=None):
+    """Finds all cycles in a graph. Legacy function for the finite plate sampling"""
+    if source is None:
+        # produce edges for all components
+        nodes = [list(i)[0] for i in nx.connected_components(G)]
+    else:
+        # produce edges for components with source
+        nodes = [source]
+    # extra variables for cycle detection:
+    cycle_stack = []
+    output_cycles = set()
+
+    def get_hashable_cycle(cycle):
+        """cycle as a tuple in a deterministic order."""
+        m = min(cycle)
+        mi = cycle.index(m)
+        mi_plus_1 = mi + 1 if mi < len(cycle) - 1 else 0
+        if cycle[mi - 1] > cycle[mi_plus_1]:
+            result = cycle[mi:] + cycle[:mi]
+        else:
+            result = list(reversed(cycle[:mi_plus_1])) + list(reversed(cycle[mi_plus_1:]))
+        return tuple(result)
+
+    for start in nodes:
+        if start in cycle_stack:
+            continue
+        cycle_stack.append(start)
+
+        stack = [(start, iter(G[start]))]
+        while stack:
+            parent, children = stack[-1]
+            try:
+                child = next(children)
+
+                if child not in cycle_stack:
+                    cycle_stack.append(child)
+                    stack.append((child, iter(G[child])))
+                else:
+                    i = cycle_stack.index(child)
+                    if i < len(cycle_stack) - 2:
+                        output_cycles.add(get_hashable_cycle(cycle_stack[i:]))
+
+            except StopIteration:
+                stack.pop()
+                cycle_stack.pop()
+
+    return [list(i) for i in output_cycles]
+
+
+def edge_lines_simplex(simplex, polylines):
+    """
+    Checks if the nodes in a simplex are part of a polyline. Legacy function for finite plate sampling.
+    """
+    simplex_edge = None
+    for polyline in polylines:
+        node_ids = polyline.point_ids()
+        if simplex[0] in node_ids and simplex[1] in node_ids:
+            simplex_edge = polyline
+            break
+
+    return simplex_edge
+
+
+def get_polygon(cyc, graph, polylines, return_lines=False):
+    """
+    Returns the polygon corresponding to the cycle cyc. If the cycle is for a non convex polygon it returns None.
+    Legacy function for finite plate sampling.
+    """
+    node_list = [graph.nodes.data("point")[i] for i in cyc]
+    simplices = [[cyc[i] for i in sim] for sim in get_edge_simplices(node_list)]
+    cycle_edges = [edge_lines_simplex(s, polylines) for s in simplices]
+    if all(cycle_edges):
+        if return_lines:
+            return get_ordered_nodes(simplices), [e.id for e in cycle_edges]
+        else:
+            return get_ordered_nodes(simplices)
+    else:
+        if return_lines:
+            return None, None
+        else:
+            return None
+
+
+def get_sub_polygons_from_cycles(cycles, graph, polylines):
+    """
+    Returns a list of the subpolygons in list of cycles.
+    Legacy function for finite plate sampling.
+    """
+    sub_polygons = []
+    for cyc in cycles:
+        poly_nodes, poly_lines = get_polygon(cyc, graph, polylines, return_lines=True)
+        if poly_lines is not None:
+            sub_polygons.append([poly_nodes, poly_lines])
+    return sub_polygons
+
+
+def polygon_cycles(polylines, graph):
+    """
+    Gets all the cycles in a graph and then filters the ones that correspond to convex polygons.
+    Legacy function for finite plate sampling.
+    """
+    cycles = find_all_cycles(graph)
+    sub_polys = get_sub_polygons_from_cycles(cycles, graph, polylines)
+    return sub_polys
+
+
+def pts_to_match_bd_change(pts_to_match):
+    """
+    Change the points to match to the opposite boundary.
+    :param pts_to_match:
+    :return:
+    """
+    pts_bd_change = copy(pts_to_match)
+    for i in range(3):
+        for val in [0.0, 1.0]:
+            where = where_pt_equal(pts_bd_change[:, i], val)
+            if len(where) == len(pts_bd_change[:, i]):
+                p = i
+                value = [v for v in [0.0, 1.0] if v != val][0]
+
+    pts_bd_change[:, p] = value
+    return pts_bd_change
+
+
+def order_cycle_nodes(G, cycle):
+    """
+    Orders the nodes in the cycle based on their position in the graph.
+
+    Args:
+        G (networkx.MultiGraph): the graph containing the cycle
+        cycle (list): a list of nodes representing a cycle in G
+
+    Returns:
+        A list of nodes representing the ordered cycle.
+    """
+    ordered_cycle = []
+    current_node = cycle[0]
+    ordered_cycle.append(current_node)
+    while len(ordered_cycle) < len(cycle):
+        neighbors = list(G.neighbors(current_node))
+        for neighbor in neighbors:
+            if neighbor in cycle and neighbor not in ordered_cycle:
+                current_node = neighbor
+                ordered_cycle.append(current_node)
+                break
+
+    return ordered_cycle
+
+
+def simplices_from_cycle(cycle):
+    """
+    Returns the simplices of a cycle.
+
+    Args:
+        cycle (list): a list of nodes representing a cycle in a graph
+
+    Returns:
+        A list of simplices representing the cycle.
+    """
+    simplices = []
+    for i in range(len(cycle) - 1):
+        simplices.append((cycle[i], cycle[i + 1]))
+    simplices.append((cycle[-1], cycle[0]))
+    return simplices
+
+
+def get_sub_polys(poly_lines):
+    """
+    Returns the sub-polygons made up by intersection and edge lines in a polygon graph.
+    :param poly_lines:
+    :return:
+    """
+    poly_graph = poly_lines.get_graph()
+    min_cycs = nx.minimum_cycle_basis(poly_graph)
+    sub_polys = [order_cycle_nodes(poly_graph, cycle) for cycle in min_cycs]
+    return sub_polys
+
+
+def get_line_neighbor(line, idx):
+    """
+    Returns the neighbor of a line by a certain index.
+    :param line:
+    :param idx:
+    :return:
+    """
+    return Line(point=line.point + idx, direction=line.direction)
+
+
+def get_line_nn(line):
+    """
+    Returns the 27 nearest neighbors of a line.
+    :param line:
+    :return:
+    """
+    line_nn = [line]
+    for idx in product([0, 1, -1], [0, 1, -1], [0, 1, -1]):
+        if idx != (0, 0, 0):
+            neighbor = get_line_neighbor(line, idx)
+            if not line_in_line_list(neighbor, line_nn):
+                line_nn.append(neighbor)
+    return line_nn
+
+
+def get_line_periodicity(line: Line):
+    """
+    Returns the periodic copies of a line.
+    :param line:
+    :return:
+    """
+    os = {0.0: 1.0, 1.0: 0.0}
+    periodic_lines = [line]
+
+    for l in get_line_nn(line):
+        if not line_in_line_list(l, periodic_lines):
+            periodic_lines.append(l)
+
+    for plane in uc:
+        if line.direction.is_parallel(plane.normal):
+            continue
+        if plane.project_line(line).is_close(line):
+            new_line = deepcopy(line)
+            new_line.point[[np.argwhere(plane.normal)[0]][0]] = os[plane.point[np.argwhere(plane.normal)[0]][0]]
+            if not line_in_line_list(new_line, periodic_lines):
+                periodic_lines.append(new_line)
+
+    return periodic_lines
+
+
 

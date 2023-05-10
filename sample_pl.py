@@ -99,12 +99,16 @@ def normal_for_rational_semi_inf_plate(inf_plate_normal, num_plates=2):
         ixs = coords[list({0, 1, 2} - {choice})[np.random.choice(2)]]
     new_normal[ixs[:2]] = inf_plate_normal[ixs[:2]]
     plate_nums = []
-    denominators = [den for den in list(range(-num_plates * 3, num_plates * 3 + 1)) if den % num_plates]
+    new_normals = []
+    den_inf = simplify_rational_normal(inf_plate_normal)[ixs[2]].denominator
+    denominators = list(set([den for den in list(range(-num_plates * 3, num_plates * 3 + 1)) if den % num_plates] +
+                            [den_inf] + [-den_inf]))
     for den in denominators:
         new_normal[ixs[2]] = inf_plate_normal[ixs[2]] + num_plates / den
-        plate_nums.append(plate_num_from_normal(new_normal, max_plates=num_plates))
+        new_normals.append(copy(new_normal))
+        plate_nums.append(plate_num_from_normal(new_normal))
     i = np.argmin(plate_nums)
-    new_normal[ixs[2]] = inf_plate_normal[ixs[2]] + num_plates / denominators[i]
+    new_normal = new_normals[i]
     return new_normal
 
 
@@ -144,12 +148,16 @@ def semi_inf_plate_at_rational_normal(new_normal, new_point, plate_to_hold):
     :param plate_to_hold: other plate in the plate-lattice with which it will intersect
     :return: semi_inf_plate
     """
-    sim_normal = simplify_rational_normal(plate_to_hold.normal, float_nums=True)
-    assert (sim_normal == new_normal).sum() == 2, \
-        f"Normal not valid for semi_inf plate. Inf: {sim_normal}, semi inf: {new_normal}"
-    diff = sim_normal - new_normal
-    assert abs(Fraction(diff[np.where(diff)[0][0]]).limit_denominator(20).numerator) >= 2, \
-        f"Normal not valid for semi_inf plate. Inf: {sim_normal}, semi inf: {new_normal}"
+    new_normal_rat = simplify_rational_normal(new_normal)
+    sim_normal = simplify_rational_normal(plate_to_hold.normal)
+    assert (sim_normal == new_normal_rat).sum() == 2, \
+        f"Normal not valid for semi_inf plate. Inf: {sim_normal}, semi inf: {new_normal_rat}"
+    diff = sim_normal - new_normal_rat
+    ix = np.argwhere(diff != 0)[0][0]
+    den = math.gcd(sim_normal[ix].denominator, new_normal_rat[ix].denominator)
+    assert abs(diff[ix].numerator * (den / diff[ix].denominator)) >= 2, \
+        f"Normal not valid for semi_inf plate. Inf: {sim_normal}, semi inf: {new_normal_rat}"
+
     new_plate = inf_plate_from_normal_and_point(new_normal, new_point)
     temp_pl = PlateList([plate_to_hold, new_plate])
     temp_pl_nn, temp_pl_nn_dict = temp_pl.get_nn_uc_plates(return_dict=True)
@@ -223,146 +231,32 @@ def sample_semi_inf_plate_along_uc(pl_uc, d_min=0.3, max_plates=5):
     return semi_inf_plate
 
 
-# Plate lattices
-def base_pl(max_plates=5, position="random"):
+# Finite plates
+def polygon_cycles_from_min_basis(polylines, graph):
     """
-    Returns a random base plate-lattice with two infinite plates.
-    :param max_plates: maximum number of sub-polygons in the semi-infinite plate
-    :param position: where to put the plate, can be "random" or "bfcc"
-    :return: pl
+    Returns a list of sub-polygons from the minimum cycle basis of a graph.
+    :param polylines:
+    :param graph:
+    :return:
     """
-    pl = PlateList([])
-    for i in range(2):
-        while True:
-            normal, polygons, polygon_edges = sample_inf_plate(max_plates=max_plates, position=position)
-            if not pl.has_normal(normal):
-                break
-        plate = Plate(normal, PolygonList.from_lists(polygons, polygon_edges, normal), "inf")
-        pl.add_plate(plate)
-
-    return pl
-
-
-def inf_pl_from_lists(normal_list, p_list):
-    """
-    Returns a plate-lattice made up of n infinite plates from a list of normals and points.
-    :param normal_list: list of size n of the n normals of the infinite plates
-    :param p_list: list of size n of the n points of the infinite plates
-    :return: pl
-    """
-    normal_list = [np.array(normal) for normal in normal_list]
-    p_list = [np.array(p) for p in p_list]
-    pl = PlateList([])
-    for normal, p in zip(normal_list, p_list):
-        polygons, polygon_edges = inf_plate(normal, p)
-        if not pl.has_plane(get_plane_from_poly(polygons[0], normal=normal)):
-            pl.add_plate(Plate(normal, PolygonList.from_lists(polygons, polygon_edges, normal), "inf"))
-
-    assert len(np.unique(np.array(pl.normal_list()), axis=0)) >= 2, \
-        "Plate lattice is not connected."
-    return pl
-
-
-def find_all_cycles(G, source=None):
-    """forked from networkx dfs_edges function. Assumes nodes are integers, or at least
-    types which work with min() and > ."""
-    if source is None:
-        # produce edges for all components
-        nodes = [list(i)[0] for i in nx.connected_components(G)]
-    else:
-        # produce edges for components with source
-        nodes = [source]
-    # extra variables for cycle detection:
-    cycle_stack = []
-    output_cycles = set()
-
-    def get_hashable_cycle(cycle):
-        """cycle as a tuple in a deterministic order."""
-        m = min(cycle)
-        mi = cycle.index(m)
-        mi_plus_1 = mi + 1 if mi < len(cycle) - 1 else 0
-        if cycle[mi - 1] > cycle[mi_plus_1]:
-            result = cycle[mi:] + cycle[:mi]
-        else:
-            result = list(reversed(cycle[:mi_plus_1])) + list(reversed(cycle[mi_plus_1:]))
-        return tuple(result)
-
-    for start in nodes:
-        if start in cycle_stack:
-            continue
-        cycle_stack.append(start)
-
-        stack = [(start, iter(G[start]))]
-        while stack:
-            parent, children = stack[-1]
-            try:
-                child = next(children)
-
-                if child not in cycle_stack:
-                    cycle_stack.append(child)
-                    stack.append((child, iter(G[child])))
-                else:
-                    i = cycle_stack.index(child)
-                    if i < len(cycle_stack) - 2:
-                        output_cycles.add(get_hashable_cycle(cycle_stack[i:]))
-
-            except StopIteration:
-                stack.pop()
-                cycle_stack.pop()
-
-    return [list(i) for i in output_cycles]
-
-
-def check_simplex_in_line(simplex, line):
-    for i in simplex:
-        if i not in line:
-            return False
-    return True
-
-
-def edge_lines_simplex(simplex, polylines):
-    simplex_edge = None
-    for polyline in polylines:
-        node_ids = polyline.point_ids()
-        if simplex[0] in node_ids and simplex[1] in node_ids:
-            simplex_edge = polyline
-            break
-
-    return simplex_edge
-
-
-def get_polygon(cyc, graph, polylines, return_lines=False):
-    node_list = [graph.nodes.data("point")[i] for i in cyc]
-    simplices = [[cyc[i] for i in sim] for sim in get_edge_simplices(node_list)]
-    cycle_edges = [edge_lines_simplex(s, polylines) for s in simplices]
-    if all(cycle_edges):
-        if return_lines:
-            return get_ordered_nodes(simplices), [e.id for e in cycle_edges]
-        else:
-            return get_ordered_nodes(simplices)
-    else:
-        if return_lines:
-            return None, None
-        else:
-            return None
-
-
-def get_sub_polygons_from_cycles(cycles, graph, polylines):
+    min_cycs = nx.minimum_cycle_basis(graph)
+    min_cycs = [order_cycle_nodes(graph, cycle) for cycle in min_cycs]
     sub_polygons = []
-    for cyc in cycles:
-        poly_nodes, poly_lines = get_polygon(cyc, graph, polylines, return_lines=True)
-        if poly_lines is not None:
-            sub_polygons.append([poly_nodes, poly_lines])
+    for cyc in min_cycs:
+        poly_lines = [edge_lines_simplex(s, polylines).id for s in simplices_from_cycle(cyc)]
+        sub_polygons.append([cyc, poly_lines])
+
     return sub_polygons
 
 
-def polygon_cycles(polylines, graph):
-    cycles = find_all_cycles(graph)
-    sub_polys = get_sub_polygons_from_cycles(cycles, graph, polylines)
-    return sub_polys
-
-
 def only_num_edges_outside(sub_poly, polylines, num_edges=1):
+    """
+    Returns True if the number of edges outside the sub-polygon is smaller or equal to num_edges.
+    :param sub_poly:
+    :param polylines:
+    :param num_edges:
+    :return:
+    """
     nodes, lines = sub_poly
     all_edges = []
     for i in range(len(nodes)):
@@ -379,6 +273,12 @@ def only_num_edges_outside(sub_poly, polylines, num_edges=1):
 
 
 def finite_plate_polylines_and_graph(finite_plate, pl_uc):
+    """
+    Returns the polylines and graph of a temporary finite plate in order to get the valid subpolygons.
+    :param finite_plate:
+    :param pl_uc:
+    :return:
+    """
     pl_uc_nn, uc_nn_dict = pl_uc.get_nn_uc_plates(return_dict=True)
     temp_pl = PlateList([plate for plate in pl_uc_nn] + [finite_plate])
     temp_intersection_list = IntersectionList.from_plate_list(temp_pl)
@@ -390,27 +290,34 @@ def finite_plate_polylines_and_graph(finite_plate, pl_uc):
 
 
 def index_points_from_graph(ixs, graph):
+    """
+    Returns the coordinate points of nodes with indices ixs from graph.
+    :param ixs:
+    :param graph:
+    :return:
+    """
     return np.array([graph.nodes.data("point")[n_id] for n_id in ixs])
 
 
-def sample_finite_polygon(pl_uc):
+def sample_finite_polygon(pl_uc, tries=5):
     """
     Sample a random normal and point to create a plane in the unit cell. Then sample a random polygon from the
     intersection of the plane with the unit cell. This polygon must have at most only one outside edge that is not an
     intersection with the plate lattice. It will return the finite polygon and if there is an outside edge, the points
     the next polygon should match in the opposite boundary.
     :param pl_uc: plate lattice unit cell
+    :param tries: number of tries to find a finite polygon
     :return: finite_polygon, pts_to_match
     """
     inside_sub_polys = []
     i = 0
     while len(inside_sub_polys) <= 1:
-        if i > 4:
+        if i > tries - 1:
             return None, None
         plane, polygon_edges, polygons = sample_random_plate()
         new_plate = Plate(plane.normal, PolygonList.from_lists([polygons], [polygon_edges], plane.normal), "finite")
         polylines, graph = finite_plate_polylines_and_graph(new_plate, pl_uc)
-        sub_polys = polygon_cycles(polylines, graph)
+        sub_polys = polygon_cycles_from_min_basis(polylines, graph)
         inside_sub_polys = [sub_poly for sub_poly in sub_polys if
                             only_num_edges_outside(sub_poly, polylines, num_edges=1)]
         i += 1
@@ -431,24 +338,6 @@ def sample_finite_polygon(pl_uc):
     return finite_polygon, pts_to_match
 
 
-def pts_to_match_bd_change(pts_to_match):
-    """
-    Change the points to match to the opposite boundary.
-    :param pts_to_match:
-    :return:
-    """
-    pts_bd_change = copy(pts_to_match)
-    for i in range(3):
-        for val in [0.0, 1.0]:
-            where = where_pt_equal(pts_bd_change[:, i], val)
-            if len(where) == len(pts_bd_change[:, i]):
-                p = i
-                value = [v for v in [0.0, 1.0] if v != val][0]
-
-    pts_bd_change[:, p] = value
-    return pts_bd_change
-
-
 def get_next_poly_cycles(normal, pts_to_match, pl_uc):
     """
     Get the next polygon cycles for the next polygon in the finite plate.
@@ -465,7 +354,7 @@ def get_next_poly_cycles(normal, pts_to_match, pl_uc):
     wanted_nodes = set([n_id for n_id, point in graph.nodes.data("point") if
                         arrays_equal(point, pts_to_match[0]) or
                         arrays_equal(point, pts_to_match[1])])
-    sub_polys = [[sp, sp_lines] for (sp, sp_lines) in polygon_cycles(polylines, graph) if
+    sub_polys = [[sp, sp_lines] for (sp, sp_lines) in polygon_cycles_from_min_basis(polylines, graph) if
                  set(sp).intersection(set(wanted_nodes)) == set(wanted_nodes)]
     valid_sub_poly_cycles = [sub_poly for sub_poly in sub_polys if
                              only_num_edges_outside(sub_poly, polylines, num_edges=2)]
@@ -540,13 +429,54 @@ def sample_finite_plate(pl_uc, max_plates=5, tries=5):
                         finite_polygon = copy(next_polygon)
                         if pts_to_match is None:
                             break
-                if next_iter:
+                if next_iter or pts_to_match is not None:
                     continue
             break
     if i == tries-1:
+        warnings.warn("Could not find a finite plate to add to the unit cell in {} tries".format(tries))
         return None
     else:
         return Plate(finite_sub_polygons[0].normal, PolygonList(finite_sub_polygons), typ="finite")
+
+
+# Plate lattices
+def base_pl(max_plates=5, position="random"):
+    """
+    Returns a random base plate-lattice with two infinite plates.
+    :param max_plates: maximum number of sub-polygons in the semi-infinite plate
+    :param position: where to put the plate, can be "random" or "bfcc"
+    :return: pl
+    """
+    pl = PlateList([])
+    for i in range(2):
+        while True:
+            normal, polygons, polygon_edges = sample_inf_plate(max_plates=max_plates, position=position)
+            if not pl.has_normal(normal):
+                break
+        plate = Plate(normal, PolygonList.from_lists(polygons, polygon_edges, normal), "inf")
+        pl.add_plate(plate)
+
+    return pl
+
+
+def inf_pl_from_lists(normal_list, p_list):
+    """
+    Returns a plate-lattice made up of n infinite plates from a list of normals and points.
+    :param normal_list: list of size n of the n normals of the infinite plates
+    :param p_list: list of size n of the n points of the infinite plates
+    :return: pl
+    """
+    normal_list = [np.array(normal) for normal in normal_list]
+    p_list = [np.array(p) for p in p_list]
+    pl = PlateList([])
+    for normal, p in zip(normal_list, p_list):
+        polygons, polygon_edges = inf_plate(normal, p)
+        if not pl.has_plane(get_plane_from_poly(polygons[0], normal=normal)):
+            pl.add_plate(Plate(normal, PolygonList.from_lists(polygons, polygon_edges, normal), "inf"))
+
+    assert len(np.unique(np.array(pl.normal_list()), axis=0)) >= 2, \
+        "Plate lattice is not connected."
+    return pl
 
 
 def pl_from_lists(normal_list, polygons_list, polygon_edges_list, plate_type_list):
@@ -606,7 +536,7 @@ def add_semi_inf_plate(pl_uc, typ="rational", position="random", num_plates=2, d
     """
     inf_plates = pl_uc.get_plates_of_type("inf")
     if typ == "rational":
-        plate_to_hold = deepcopy(inf_plates[np.argmin([len(plate) for plate in inf_plates])])
+        plate_to_hold = deepcopy(inf_plates[np.random.choice(len(inf_plates))])
         semi_inf_plate = sample_semi_inf_rational_plate(plate_to_hold, num_plates=num_plates, position=position)
     else:
         semi_inf_plate = sample_semi_inf_plate_along_uc(pl_uc, d_min=d_min, max_plates=max_plates)
@@ -624,12 +554,13 @@ def add_finite_plate(pl_uc, max_plates=5, tries=5):
     """
     finite_plate = sample_finite_plate(pl_uc, max_plates, tries)
     if finite_plate is None:
-        warnings.warn("Could not find a finite plate to add to the unit cell in {} tries".format(tries))
         return pl_uc
     else:
         pl_uc.add_plate(finite_plate)
         return pl_uc
 
+
+# Graph functions
 def get_poly_lines(polygon: Polygon, intersection_list: IntersectionList = None, ix=None):
     """
     Returns the lines of a polygon as a PolygonLineCollection.
@@ -647,43 +578,6 @@ def get_poly_lines(polygon: Polygon, intersection_list: IntersectionList = None,
         if len(int_line.line_pts) > 1:
             poly_lines.add_intersection_line(PolygonLine.from_Intersection(int_line))
     return poly_lines
-
-
-def order_cycle_nodes(G, cycle):
-    """
-    Orders the nodes in the cycle based on their position in the graph.
-
-    Args:
-        G (networkx.MultiGraph): the graph containing the cycle
-        cycle (list): a list of nodes representing a cycle in G
-
-    Returns:
-        A list of nodes representing the ordered cycle.
-    """
-    ordered_cycle = []
-    current_node = cycle[0]
-    ordered_cycle.append(current_node)
-    while len(ordered_cycle) < len(cycle):
-        neighbors = list(G.neighbors(current_node))
-        for neighbor in neighbors:
-            if neighbor in cycle and neighbor not in ordered_cycle:
-                current_node = neighbor
-                ordered_cycle.append(current_node)
-                break
-
-    return ordered_cycle
-
-
-def get_sub_polys(poly_lines):
-    """
-    Returns the sub-polygons made up by intersection and edge lines in a polygon graph.
-    :param poly_lines:
-    :return:
-    """
-    poly_graph = poly_lines.get_graph()
-    min_cycs = nx.minimum_cycle_basis(poly_graph)
-    sub_polys = [order_cycle_nodes(poly_graph, cycle) for cycle in min_cycs]
-    return sub_polys
 
 
 def get_edge_periodicity(edge: PolygonNodeEdge, epsilon=epsilon):
@@ -720,56 +614,6 @@ def get_edge_periodicity(edge: PolygonNodeEdge, epsilon=epsilon):
                     periodic_edges.append(new_edge)
 
     return periodic_edges
-
-
-def get_line_neighbor(line, idx):
-    """
-    Returns the neighbor of a line by a certain index.
-    :param line:
-    :param idx:
-    :return:
-    """
-    return Line(point=line.point + idx, direction=line.direction)
-
-
-def get_line_nn(line):
-    """
-    Returns the 27 nearest neighbors of a line.
-    :param line:
-    :return:
-    """
-    line_nn = [line]
-    for idx in product([0, 1, -1], [0, 1, -1], [0, 1, -1]):
-        if idx != (0, 0, 0):
-            neighbor = get_line_neighbor(line, idx)
-            if not line_in_line_list(neighbor, line_nn):
-                line_nn.append(neighbor)
-    return line_nn
-
-
-def get_line_periodicity(line: Line):
-    """
-    Returns the periodic copies of a line.
-    :param line:
-    :return:
-    """
-    os = {0.0: 1.0, 1.0: 0.0}
-    periodic_lines = [line]
-
-    for l in get_line_nn(line):
-        if not line_in_line_list(l, periodic_lines):
-            periodic_lines.append(l)
-
-    for plane in uc:
-        if line.direction.is_parallel(plane.normal):
-            continue
-        if plane.project_line(line).is_close(line):
-            new_line = deepcopy(line)
-            new_line.point[[np.argwhere(plane.normal)[0]][0]] = os[plane.point[np.argwhere(plane.normal)[0]][0]]
-            if not line_in_line_list(new_line, periodic_lines):
-                periodic_lines.append(new_line)
-
-    return periodic_lines
 
 
 def is_valid_sub_poly(sub_poly, poly_lines):
@@ -987,6 +831,13 @@ def collapse_same_lines(line_ixs, intersection_list: IntersectionList):
 
 
 def get_graph(all_sub_polygons, all_lines_in_sub_polygons, intersection_list: IntersectionList):
+    """
+    Creates a graph from a list of sub-polygons and lines.
+    :param all_sub_polygons:
+    :param all_lines_in_sub_polygons:
+    :param intersection_list:
+    :return:
+    """
     line_id_dict = {}
     unique_lines = list(set([j for i in all_lines_in_sub_polygons for j in i]))
     same_line_dict = collapse_same_lines(unique_lines, intersection_list)
@@ -1028,6 +879,11 @@ def get_graph(all_sub_polygons, all_lines_in_sub_polygons, intersection_list: In
 
 
 def get_intersection_line_pts_from_poly_lines(poly_lines):
+    """
+    Gets the intersection line points from a list of PolyLines.
+    :param poly_lines:
+    :return:
+    """
     intersection_lines = []
     for edge in poly_lines.all_edges():
         if edge.is_intersection:

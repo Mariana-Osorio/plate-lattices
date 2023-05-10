@@ -201,15 +201,31 @@ def get_ordered_nodes(simplices):
     return nodes
 
 
+def to_2d(poly):
+    """
+    Returns the 2D projection of a 3d planar polygon.
+    """
+    # New reference system
+    a = poly[1]-poly[0]
+    a = a/np.linalg.norm(a)
+    n = np.cross(a, poly[-1]-poly[0])
+    n = n/np.linalg.norm(n)
+    b = -np.cross(a, n)
+
+    # Reference system change
+    R_inv = np.linalg.inv(np.array([a, b, n])).T
+    real = np.dot(R_inv, poly.T).T
+    real[np.isclose(real, 0)] = 0
+
+    return real[:, :2]
+
+
 def get_edge_simplices(poly):
-    normal = np.cross(poly[1] - poly[0], poly[2] - poly[0])
-    new_poly = np.vstack((poly, 100 * normal))
-    hull = ConvexHull(new_poly)
-    simplices = []
-    for s in hull.simplices:
-        if len(poly) in s:
-            simplices.append([i for i in s if i != len(poly)])
-    return simplices
+    poly = np.array(poly)
+    hull = ConvexHull(to_2d(poly))
+    simplices = hull.simplices
+
+    return [[el for el in simplex] for simplex in simplices]
 
 
 def arg_order_points_on_line(points, direction):

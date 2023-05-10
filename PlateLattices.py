@@ -1,6 +1,4 @@
 from skspatial.typing import array_like
-from copy import copy, deepcopy
-import networkx as nx
 from pl_functions import *
 
 
@@ -196,6 +194,19 @@ class PlateList:
                 for p in self[i]:
                     p.id = j
                     j += 1
+
+    @classmethod
+    def from_lists(cls, normal_list, polygons_list, polygon_edges_list, plate_type_list):
+        plates = []
+
+        for i in range(len(normal_list)):
+            polygons = []
+            for j in range(len(polygons_list[i])):
+                polygons.append(Polygon(polygons_list[i][j], polygon_edges_list[i][j], normal_list[i]))
+
+            plates.append(Plate(normal_list[i], PolygonList(polygons), plate_type_list[i]))
+
+        return cls(plates)
 
     def __repr__(self):
         return f"PlateList({len(self.plates)} plates)"
@@ -398,7 +409,7 @@ class Intersection:
 
     def order_line_pts(self):
         order = arg_order_points_on_line(self.line_pts, self.line.direction)
-        self.line_pts = [self.line_pts[i] for i in order]
+        self.line_pts = np.array([self.line_pts[i] for i in order])
         self.pt_ids = [self.pt_ids[i] for i in order]
 
     def find_pt(self, point):
