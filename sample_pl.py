@@ -604,7 +604,7 @@ def sample_plate_lattice(n_inf_p, n_semi_inf_p, n_finite_p,  position="random", 
     return pl_uc
 
 
-def random_plate_lattice(n_plates, position="random", semi_inf="random", num_plates=2, d_min=0.3, max_plates=5,
+def random_plate_lattice(n_plates, position="random", semi_inf="along_uc", num_plates=2, d_min=0.3, max_plates=5,
                          tries=5, verbose=False):
     """
     Returns a random plate lattice with a base plate lattice made up of 2 infinite plates and then n_plates randomly
@@ -619,10 +619,21 @@ def random_plate_lattice(n_plates, position="random", semi_inf="random", num_pla
     :param verbose:
     :return:
     """
-    n_inf_p, n_semi_inf_p, n_finite_p = distr_plates(n_plates)
-    pl_uc = sample_plate_lattice(n_inf_p, n_semi_inf_p, n_finite_p,  position=position, semi_inf=semi_inf,
-                                 num_plates=num_plates, d_min=d_min, max_plates=max_plates, tries=tries,
-                                 verbose=verbose)
+    while True:
+        n_inf_p, n_semi_inf_p, n_finite_p = distr_plates(n_plates)
+        if verbose:
+            print(f"Trying to sample plate lattice with {n_inf_p} inf, {n_semi_inf_p} semi-inf, {n_finite_p} finite "
+                  f"plates.")
+        try:
+            pl_uc = sample_plate_lattice(n_inf_p, n_semi_inf_p, n_finite_p,  position=position, semi_inf=semi_inf,
+                                         num_plates=num_plates, d_min=d_min, max_plates=max_plates, tries=tries,
+                                         verbose=verbose)
+            break
+        except:
+            if verbose:
+                print(f"Could not sample plate lattice with {n_inf_p} inf, {n_semi_inf_p} "
+                      f"semi-inf, {n_finite_p} finite plates. Trying again.")
+            continue
     return pl_uc
 
 
@@ -1013,3 +1024,73 @@ def read_graph(filename):
     """
     return nx.read_gpickle(filename)
 
+
+def pl_uc_from_graph(graph):
+    """
+    Gets the plate-lattice from the graph.
+    :param graph:
+    :return:
+    """
+    plates = {}
+    for e in graph.edges.data():
+        if e[2]["id"] not in plates.keys():
+            plates[e[2]["id"]] = dict.fromkeys(["normal", "polygons", "polygon_edges", "og_plate_typ"])
+        if plates[e[2]["id"]]['normal'] is None:
+            plates[e[2]["id"]]['normal'] = e[2]['normal']
+        if plates[e[2]["id"]]['polygons'] is None:
+            plates[e[2]["id"]]['polygons'] = e[2]['polygon_vertices']
+        if plates[e[2]["id"]]['og_plate_typ'] is None:
+            plates[e[2]["id"]]['og_plate_typ'] = e[2]['type']
+
+    for plate_ix in plates:
+        polys = plates[plate_ix]["polygons"]
+        num_polys = len(polys)
+        joined = []
+        for i in range(num_polys):
+            poly_1 = polys[i]
+            for j in range(i + 1, num_polys):
+                poly_2 = polys[j]
+                for p in poly_1:
+                    if point_in_array(p, poly_2):
+                        joined.append([i, j])
+                        break
+        polygons = []
+        poly_ixs = get_connected(joined)
+        polys_ix_list = list(range(num_polys))
+
+        for ixs in poly_ixs:
+            connected_poly = np.empty([0, 3])
+            for i in ixs:
+                connected_poly = np.vstack((connected_poly, polys[i]))
+                polys_ix_list.remove(i)
+            polygons.append(connected_poly)
+
+        for i in polys_ix_list:
+            polygons.append(polys[i])
+
+        polygons = clean_polys(polygons)[0]
+        plates[plate_ix]["polygon_edges"] = []
+        for i in range(len(polygons)):
+            polygons[i] = np.array(polygons[i])
+            hull = ConvexHull(to_2d(polygons[i]))
+            poly_edges = []
+            for simp in hull.simplices:
+                poly_edges.append(Line.from_points(*polygons[i][simp]))
+            polygons[i] = polygons[i][hull.vertices]
+            plates[plate_ix]["polygon_edges"].append(poly_edges)
+
+        plates[plate_ix]["polygons"] = polygons
+
+        plate_obj_list = []
+        for plate_ix in plates:
+            polygons = []
+            for i in range(len(plates[plate_ix]["polygons"])):
+                polygons.append(Polygon(plates[plate_ix]["polygons"][i], plates[plate_ix]["polygon_edges"][i],
+                                        plates[plate_ix]["normal"]))
+
+            plate_obj_list.append(
+                Plate(plates[plate_ix]["normal"], PolygonList(polygons), plates[plate_ix]['og_plate_typ']))
+
+        pl_uc = PlateList(plate_obj_list)
+
+        return pl_uc
