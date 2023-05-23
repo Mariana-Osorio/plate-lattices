@@ -560,6 +560,94 @@ def add_finite_plate(pl_uc, max_plates=5, tries=5):
         return pl_uc
 
 
+def distr_plates(n_plates):
+    """
+    Returns a random distribution of n plates.
+    :param n_plates:
+    :return:
+    """
+    options = [l for l in list(product(range(n_plates + 1), repeat=3)) if sum(l) == n_plates]
+    option = options[np.random.choice(range(len(options)))]
+    return option
+
+
+def sample_plate_lattice(n_inf_p, n_semi_inf_p, n_finite_p,  position="random", semi_inf="along_uc",
+                         num_plates=2, d_min=0.3, max_plates=5, tries=5, verbose=False):
+    """
+    Returns a random plate lattice given the number of infinite, semi-infinite and finite plates.
+    :param n_inf_p:
+    :param n_semi_inf_p:
+    :param n_finite_p:
+    :param position:
+    :param semi_inf:
+    :param num_plates:
+    :param d_min:
+    :param max_plates:
+    :param tries:
+    :param verbose:
+    :return:
+    """
+    pl_uc = base_pl(max_plates=max_plates, position=position)
+    for i in range(n_inf_p):
+        pl_uc = add_inf_plate(pl_uc, max_plates=max_plates, position=position)
+
+    for i in range(n_semi_inf_p):
+        pl_uc = add_semi_inf_plate(pl_uc, typ=semi_inf, position=position, num_plates=num_plates, d_min=d_min,
+                                   max_plates=max_plates)
+    for i in range(n_finite_p):
+        pl_uc = add_finite_plate(pl_uc, max_plates=max_plates, tries=tries)
+        if pl_uc is None:
+            if verbose:
+                print("Could not add finite plate.")
+            break
+
+    return pl_uc
+
+
+def random_plate_lattice(n_plates, position="random", semi_inf="random", num_plates=2, d_min=0.3, max_plates=5,
+                         tries=5, verbose=False):
+    """
+    Returns a random plate lattice with a base plate lattice made up of 2 infinite plates and then n_plates randomly
+    distributed in infinite, semi-infinite and finite plates.
+    :param n_plates:
+    :param position:
+    :param semi_inf:
+    :param num_plates:
+    :param d_min:
+    :param max_plates:
+    :param tries:
+    :param verbose:
+    :return:
+    """
+    n_inf_p, n_semi_inf_p, n_finite_p = distr_plates(n_plates)
+    pl_uc = sample_plate_lattice(n_inf_p, n_semi_inf_p, n_finite_p,  position=position, semi_inf=semi_inf,
+                                 num_plates=num_plates, d_min=d_min, max_plates=max_plates, tries=tries,
+                                 verbose=verbose)
+    return pl_uc
+
+
+def save_plate_lattice(pl_uc, filename):
+    """
+    Saves a plate lattice to a file.
+    :param pl_uc:
+    :param filename:
+    :return:
+    """
+    with open(filename, "wb") as f:
+        pickle.dump(pl_uc, f)
+
+
+def load_plate_lattice(filename):
+    """
+    Loads a plate lattice from a file.
+    :param filename:
+    :return:
+    """
+    with open(filename, "rb") as f:
+        pl_uc = pickle.load(f)
+    return pl_uc
+
+
 # Graph functions
 def get_poly_lines(polygon: Polygon, intersection_list: IntersectionList = None, ix=None):
     """
@@ -889,3 +977,39 @@ def get_intersection_line_pts_from_poly_lines(poly_lines):
         if edge.is_intersection:
             intersection_lines.append(np.array(edge.points()))
     return intersection_lines
+
+
+def graph_from_pl(pl_uc):
+    """
+    Gets the graph from the plate-lattice.
+    :param pl_uc:
+    :return:
+    """
+    pl_uc_nn, uc_nn_dict = pl_uc.get_nn_uc_plates(return_dict=True)
+    intersection_list = IntersectionList.from_plate_list(pl_uc_nn)
+    valid_sub_polys_plate = get_plate_valid_sub_polys(pl_uc, intersection_list, id_dict=uc_nn_dict)
+    all_sub_polygons, all_lines_in_sub_polygons = get_sub_polygons_and_lines_for_graph(valid_sub_polys_plate,
+                                                                                       pl_uc, intersection_list)
+    plate_lattice_graph = get_graph(all_sub_polygons, all_lines_in_sub_polygons, intersection_list)
+
+    return plate_lattice_graph
+
+
+def save_graph(graph, filename):
+    """
+    Saves the graph to a file.
+    :param graph:
+    :param filename:
+    :return:
+    """
+    nx.write_gpickle(graph, filename)
+
+
+def read_graph(filename):
+    """
+    Reads the graph from a file.
+    :param filename:
+    :return:
+    """
+    return nx.read_gpickle(filename)
+
